@@ -1,0 +1,27 @@
+{
+  "name": "OneTapBattles",
+  "servePort": 34872,
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "Shared": { "$path": "src/Shared" },
+      "Events": { "$path": "src/Shared/Events" }
+    },
+    "ServerScriptService": {
+      "$className": "ServerScriptService",
+      "Services": { "$path": "src/Server/Services" }
+    },
+    "StarterPlayer": {
+      "$className": "StarterPlayer",
+      "StarterPlayerScripts": {
+        "$className": "StarterPlayerScripts",
+        "Client": { "$path": "src/Client" }
+      }
+    },
+    "StarterGui": {
+      "$className": "StarterGui",
+      "HUD": { "$path": "src/Client/HUD" }
+    }
+  }
+}
