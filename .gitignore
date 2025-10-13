@@ -1,6 +1,26 @@
-# Project place file
-/now.rbxlx
+# Roblox / Rojo / Aftman
+*.rbxl
+*.rbxlx
+*.rbxm
+*.rbxmx
+*.tmp
+*.lock
 
-# Roblox Studio lock files
-/*.rbxlx.lock
-/*.rbxl.lock
+# VS Code
+.vscode/
+
+# Rojo caches / outputs
+build/
+out/
+.roblox/
+
+# Aftman cache
+.aftman/bin/
+.aftman/cache/
+
+# Logs / sistema
+logs/
+*.log
+Thumbs.db
+.DS_Store
+    

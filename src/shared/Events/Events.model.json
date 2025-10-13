@@ -1,0 +1,20 @@
+{
+  "className": "Folder",
+  "properties": {
+    "Name": "Events"
+  },
+  "children": [
+    {
+      "className": "RemoteEvent",
+      "properties": { "Name": "Round:State" }
+    },
+    {
+      "className": "RemoteEvent",
+      "properties": { "Name": "Weapon:Fire:v1" }
+    },
+    {
+      "className": "RemoteEvent",
+      "properties": { "Name": "Weapon:Hit:v1" }
+    }
+  ]
+}
