@@ -1,12 +1,1 @@
--- StarterPlayerScripts/Client/Controllers/HUDController.lua
--- Rol: marcador, temporizador, banners; solo escucha Round:State.
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Contracts = require(ReplicatedStorage.Shared.Contracts)
-
-local HUDController = {}
-
-function HUDController.start()
-	-- TODO: suscribirse a Round:State y actualizar UI
-end
-
-return HUDController
+-- Esto es como usar ChatGPT?\n-- StarterPlayerScripts/Client/Controllers/HUDController.lua\n-- Rol: marcador, temporizador, banners; solo escucha Round:State.\nlocal ReplicatedStorage = game:GetService("ReplicatedStorage")\nlocal Contracts = require(ReplicatedStorage.Shared.Contracts)\n\nlocal HUDController = {}\n\nfunction HUDController.start()\n\t-- TODO: suscribirse a Round:State y actualizar UI\nend\n\nreturn HUDController\n
