@@ -1,0 +1,41 @@
+name: Publish src to Pages
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate index
+        run: |
+          mkdir -p public
+          echo '<!doctype html><meta charset="utf-8"><title>now/src</title><h1>now/src</h1><ul>' > public/index.html
+          while IFS= read -r -d '' f; do
+            rel="${f#src/}"
+            url="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/src/${rel}"
+            printf '<li><a href="%s">%s</a></li>\n' "$url" "$rel" >> public/index.html
+          done < <(find src -type f -print0 | sort -z)
+          echo '</ul>' >> public/index.html
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
