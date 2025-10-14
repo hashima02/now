@@ -1,4 +1,5 @@
 -- ServerScriptService/Services/RoundService.lua
+--jajalol
 -- Rol: control de estados de ronda/match y temporizadores.
 -- Eventos IN: (ninguno directo; escucha muertes desde HealthService)
 -- Eventos OUT: ReplicatedStorage/Events["Round:State"]
