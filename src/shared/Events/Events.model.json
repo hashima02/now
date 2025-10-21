@@ -1,20 +1,15 @@
 {
   "className": "Folder",
-  "properties": {
-    "Name": "Events"
-  },
+  "properties": { "Name": "Events" },
   "children": [
     {
-      "className": "RemoteEvent",
-      "properties": { "Name": "Round:State" }
-    },
-    {
-      "className": "RemoteEvent",
-      "properties": { "Name": "Weapon:Fire:v1" }
-    },
-    {
-      "className": "RemoteEvent",
-      "properties": { "Name": "Weapon:Hit:v1" }
+      "className": "Folder",
+      "properties": { "Name": "Remotes" },
+      "children": [
+        { "className": "RemoteEvent", "properties": { "Name": "Round:State" } },
+        { "className": "RemoteEvent", "properties": { "Name": "Weapon:Fire:v1" } },
+        { "className": "RemoteEvent", "properties": { "Name": "Weapon:Hit:v1" } }
+      ]
     }
   ]
 }
