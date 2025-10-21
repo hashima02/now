@@ -1,23 +1,28 @@
 -- File: src/server/Services/WeaponService.lua
 --!strict
--- WeaponService.lua
+-- Procesa disparos, determina impactos y notifica daño.
+-- Cambios:
+--  - Usa ReplicatedStorage/Events/Remotes para Weapon:Fire:v1 / Weapon:Hit:v1
+--  - Expone setRoundState y respeta "ACTIVE" para permitir disparos
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
-local Events = ReplicatedStorage:WaitForChild("Events")
-local EVT_FIRE = Events:WaitForChild("Weapon:Fire:v1")
-local EVT_HIT  = Events:WaitForChild("Weapon:Hit:v1")
+-- Remotos (unificado a Events/Remotes)
+local Events  = ReplicatedStorage:WaitForChild("Events")
+local Remotes = Events:WaitForChild("Remotes")
+local EVT_FIRE: RemoteEvent = Remotes:WaitForChild("Weapon:Fire:v1") :: RemoteEvent
+local EVT_HIT:  RemoteEvent = Remotes:WaitForChild("Weapon:Hit:v1")  :: RemoteEvent
 
+-- Config global (Shared/Config.lua exporta la tabla con Deagle directo)
 local Shared = ReplicatedStorage:WaitForChild("Shared")
--- FIX: Config es un módulo único (no carpeta con submódulo Weapon)
 local ConfigWeapon = require(Shared:WaitForChild("Config"))
 
-export type RoundState = "WAITING" | "PREPARE" | "COUNTDOWN" | "ACTIVE" | "ROUND_END"
+export type RoundState = "PREPARE" | "COUNTDOWN" | "ACTIVE" | "END"
 
 local M = {}
-local roundState: RoundState = "WAITING"
+local roundState: RoundState = "PREPARE"
 
 -- cooldowns por jugador
 local lastShot: {[number]: number} = {}
@@ -106,32 +111,40 @@ local function applyDamage(target: Instance, dmg: number)
 end
 
 function M.start()
-	print("[WEAPON] start()")
+	print("[WeaponService] start OK")
 	EVT_FIRE.OnServerEvent:Connect(function(plr: Player, payload: any)
+		-- Solo permitir disparos en ACTIVE
 		if roundState ~= "ACTIVE" then return end
 
 		local weaponName = (payload and payload.weapon) or "Deagle"
-		local ok = canFire(plr, weaponName)
+
+		local ok = false
+		ok = select(1, canFire(plr, weaponName))
 		if not ok then return end
 
 		local hitPart, hitPos = serverRaycastFromPlr(plr, 1000)
+		lastShot[plr.UserId] = time()
+
 		if not hitPart then
-			lastShot[plr.UserId] = time()
+			-- feedback al tirador (fallo)
 			EVT_HIT:FireClient(plr, false, hitPos)
 			return
 		end
 
+		-- Validar FOV
 		local char = plr.Character
 		local hrp = char and char:FindFirstChild("HumanoidRootPart") :: BasePart?
 		local fov = getFovDeg(weaponName)
 		if hrp and not isWithinFOV(hrp.CFrame, hitPos, fov) then
-			lastShot[plr.UserId] = time()
 			EVT_HIT:FireClient(plr, false, hitPos)
 			return
 		end
 
-		applyDamage(hitPart, resolveDamage(weaponName, hitPart.Name))
-		lastShot[plr.UserId] = time()
+		-- Calcular y aplicar daño
+		local dmg = resolveDamage(weaponName, hitPart.Name)
+		applyDamage(hitPart, dmg)
+
+		-- Feedback de hit (simple)
 		EVT_HIT:FireClient(plr, true, hitPos)
 	end)
 end

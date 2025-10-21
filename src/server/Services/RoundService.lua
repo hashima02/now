@@ -1,18 +1,23 @@
 -- File: src/server/Services/RoundService.lua
 --!strict
--- FSM simple de ronda y broadcast vía Remotes
+-- FSM de ronda y broadcast vía Remotes.
+-- Cambios:
+--  - Requiere WeaponService y le propaga el estado en setState(...)
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
-local TeleportService = game:GetService("TeleportService") -- si lo necesitas luego
 
-local Events = ReplicatedStorage:WaitForChild("Events")
+-- Remotos (unificado a Events/Remotes)
+local Events  = ReplicatedStorage:WaitForChild("Events")
 local Remotes = Events:WaitForChild("Remotes")
 local EVT_ROUND_STATE: RemoteEvent = Remotes:WaitForChild("Round:State") :: RemoteEvent
 
-local M = {}
+-- Notificar a WeaponService el estado de la ronda
+local WeaponService = require(script.Parent:WaitForChild("WeaponService"))
 
 export type RoundState = "PREPARE" | "COUNTDOWN" | "ACTIVE" | "END"
+
+local M = {}
 
 local ACTIVE_TIME = 60
 local COUNTDOWN_TIME = 10
@@ -34,6 +39,11 @@ local function setState(state: RoundState, dur: number?)
 	else
 		endsAt = nil
 	end
+
+	-- **NUEVO**: Propaga estado a WeaponService
+	WeaponService.setRoundState(state)
+
+	-- Broadcast a clientes
 	broadcast(currentState, endsAt)
 end
 
