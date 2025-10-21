@@ -1,71 +1,111 @@
 --!strict
--- File: src/client/Controllers/HUDController.lua
-
+-- HUDController.lua
+local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Players = game:GetService("Players")
-local LocalPlayer = Players.LocalPlayer
+local RunService        = game:GetService("RunService")
 
--- Contracts opcional (usa tus nombres si existen)
-local Contracts = nil
-pcall(function()
-	Contracts = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Contracts"))
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
+
+-- Remotes
+local Events          = ReplicatedStorage:WaitForChild("Events")
+local EVT_ROUND_STATE = Events:WaitForChild("Round:State")
+
+-- Constantes (deben coincidir con RoundService)
+local COUNTDOWN_DURATION = 10
+local ACTIVE_DURATION    = 60
+
+-- Estado local
+local roundState: "WAITING" | "PREPARE" | "COUNTDOWN" | "ACTIVE" | "ROUND_END" = "WAITING"
+local phaseEndT = 0
+
+-- UI mínima (se autocrea si no existe)
+local function ensureUI()
+	local hud = PlayerGui:FindFirstChild("HUDGui") :: ScreenGui?
+	if not hud then
+		hud = Instance.new("ScreenGui")
+		hud.Name = "HUDGui"
+		hud.ResetOnSpawn = false
+		hud.IgnoreGuiInset = true
+		hud.Parent = PlayerGui
+	end
+
+	local stateLabel = hud:FindFirstChild("StateLabel") :: TextLabel?
+	if not stateLabel then
+		stateLabel = Instance.new("TextLabel")
+		stateLabel.Name = "StateLabel"
+		stateLabel.Size = UDim2.new(0, 220, 0, 32)
+		stateLabel.Position = UDim2.new(0, 16, 0, 16)
+		stateLabel.BackgroundTransparency = 0.25
+		stateLabel.TextScaled = true
+		stateLabel.Font = Enum.Font.GothamBold
+		stateLabel.TextColor3 = Color3.new(1, 1, 1)
+		stateLabel.Parent = hud
+	end
+
+	local timerLabel = hud:FindFirstChild("TimerLabel") :: TextLabel?
+	if not timerLabel then
+		timerLabel = Instance.new("TextLabel")
+		timerLabel.Name = "TimerLabel"
+		timerLabel.Size = UDim2.new(0, 120, 0, 32)
+		timerLabel.Position = UDim2.new(0, 16, 0, 56)
+		timerLabel.BackgroundTransparency = 0.25
+		timerLabel.TextScaled = true
+		timerLabel.Font = Enum.Font.Gotham
+		timerLabel.TextColor3 = Color3.new(1, 1, 1)
+		timerLabel.Parent = hud
+	end
+
+	return hud :: ScreenGui, stateLabel :: TextLabel, timerLabel :: TextLabel
+end
+
+local HUD, StateLabel, TimerLabel = ensureUI()
+
+local function setStateUI(s: string)
+	StateLabel.Text = ("STATE: %s"):format(s)
+	-- Colores simples por estado
+	local colors = {
+		WAITING   = Color3.fromRGB(120,120,120),
+		PREPARE   = Color3.fromRGB(0,170,255),
+		COUNTDOWN = Color3.fromRGB(255,170,0),
+		ACTIVE    = Color3.fromRGB(0,200,0),
+		ROUND_END = Color3.fromRGB(255,70,70),
+	}
+	StateLabel.BackgroundColor3 = colors[s] or Color3.fromRGB(60,60,60)
+end
+
+local function setTimerUI(secLeft: number?)
+	if not secLeft then
+		TimerLabel.Text = "T: --"
+		TimerLabel.BackgroundColor3 = Color3.fromRGB(60,60,60)
+		return
+	end
+	if secLeft < 0 then secLeft = 0 end
+	TimerLabel.Text = ("T: %d"):format(math.floor(secLeft + 0.5))
+	TimerLabel.BackgroundColor3 = (roundState == "COUNTDOWN") and Color3.fromRGB(255,170,0) or Color3.fromRGB(60,60,60)
+end
+
+-- Reacción a cambios de estado (server → client)
+EVT_ROUND_STATE.OnClientEvent:Connect(function(s: any, _seed: number?)
+	roundState = s
+	setStateUI(s)
+
+	if s == "COUNTDOWN" then
+		phaseEndT = time() + COUNTDOWN_DURATION
+	elseif s == "ACTIVE" then
+		phaseEndT = time() + ACTIVE_DURATION
+	else
+		phaseEndT = 0
+		setTimerUI(nil)
+	end
 end)
 
-local REMOTES = ReplicatedStorage:WaitForChild("Events"):WaitForChild("Remotes")
-
-local EVT_ROUND_STATE = (Contracts and Contracts.Events and Contracts.Events.RoundState)
-	and Contracts.Events.RoundState
-	or "Round:State"
-
-local EVT_WEAPON_HIT = (Contracts and Contracts.Events and Contracts.Events.WeaponHitV1)
-	and Contracts.Events.WeaponHitV1
-	or "Weapon:Hit:v1"
-
-local RoundStateRE = REMOTES:FindFirstChild(EVT_ROUND_STATE)
-local WeaponHitRE  = REMOTES:FindFirstChild(EVT_WEAPON_HIT)
-
-assert(RoundStateRE and RoundStateRE:IsA("RemoteEvent"), "[HUDController] RemoteEvent '"..EVT_ROUND_STATE.."' no encontrado")
-assert(WeaponHitRE  and WeaponHitRE:IsA("RemoteEvent"),  "[HUDController] RemoteEvent '"..EVT_WEAPON_HIT.."' no encontrado")
-
-local M = {}
-
--- Helpers mínimos de UI (placeholders): sustituye con tu ScreenGui/TextLabels reales
-local function updateRoundHud(payload: {state: string, round: number?, time_left: number?, config: any?})
-	local s = payload.state
-	local r = payload.round or 0
-	local t = math.max(0, math.floor((payload.time_left or 0) + 0.5))
-	-- TODO: vincula con tus TextLabels/Barras
-	print(("[HUD] Round=%d | State=%s | T=%ds"):format(r, tostring(s), t))
-end
-
-local function showHitMarker(data: {
-	from: number, target: number?, at: Vector3, part: string,
-	isHeadshot: boolean, damage: number, killed: boolean
-})
-	-- TODO: dispara tu FX: crosshair flash, sonido “hit”, marcador en pantalla, etc.
-	local tagSelf = data.from == LocalPlayer.UserId and "[YOU]" or "[ALLY/OTHER]"
-	local targetStr = data.target and tostring(data.target) or "nil"
-	print(("[HIT] %s -> part=%s hs=%s dmg=%d killed=%s target=%s at=(%.1f,%.1f,%.1f)")
-		:format(tagSelf, data.part, tostring(data.isHeadshot), data.damage, tostring(data.killed), targetStr,
-			data.at.X, data.at.Y, data.at.Z))
-end
-
-function M.start()
-	print("[HUD] start()")
-
-	-- Estado de ronda → timer / textos / indicadores
-	RoundStateRE.OnClientEvent:Connect(function(payload)
-		if typeof(payload) ~= "table" then return end
-		updateRoundHud(payload)
-	end)
-
-	-- Impactos de arma → marcador de golpe / killfeed / trazadores
-	WeaponHitRE.OnClientEvent:Connect(function(data)
-		if typeof(data) ~= "table" then return end
-		-- Campos esperados: from, target?, at(Vector3), part, isHeadshot, damage, killed
-		if typeof(data.at) ~= "Vector3" then return end
-		showHitMarker(data)
-	end)
-end
-
-return M
+-- Loop visual del timer
+RunService.Heartbeat:Connect(function()
+	if roundState == "COUNTDOWN" or roundState == "ACTIVE" then
+		local remain = phaseEndT - time()
+		setTimerUI(remain)
+	else
+		setTimerUI(nil)
+	end
+end)

@@ -1,132 +1,152 @@
 --!strict
--- File: src/server/Services/WeaponService.lua
-
+-- WeaponService.lua
+local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace         = game:GetService("Workspace")
 
-local ServicesFolder    = script.Parent
-local RoundService      = require(ServicesFolder:WaitForChild("RoundService"))
-local HealthService     = require(ServicesFolder:WaitForChild("HealthService"))
+local Events            = ReplicatedStorage:WaitForChild("Events")
+local EVT_FIRE          = Events:WaitForChild("Weapon:Fire:v1")
+local EVT_HIT           = Events:WaitForChild("Weapon:Hit:v1") -- solo para replicar hitmarkers
 
--- Contracts opcional
-local Contracts = nil
-pcall(function()
-	Contracts = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Contracts"))
-end)
-
--- Config opcional (para tomar el rango del arma)
-local Config = nil
-pcall(function()
-	Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
-end)
-
-local REMOTES = ReplicatedStorage:WaitForChild("Events"):WaitForChild("Remotes")
-local EVT_WEAPON_FIRE = (Contracts and Contracts.Events and Contracts.Events.WeaponFireV1) and Contracts.Events.WeaponFireV1 or "Weapon:Fire:v1"
-local EVT_WEAPON_HIT  = (Contracts and Contracts.Events and Contracts.Events.WeaponHitV1)  and Contracts.Events.WeaponHitV1  or "Weapon:Hit:v1"
-
-local WeaponFireRE = REMOTES:FindFirstChild(EVT_WEAPON_FIRE)
-local WeaponHitRE  = REMOTES:FindFirstChild(EVT_WEAPON_HIT)
-assert(WeaponFireRE and WeaponFireRE:IsA("RemoteEvent"), "[WeaponService] RemoteEvent '"..EVT_WEAPON_FIRE.."' no encontrado")
-assert(WeaponHitRE  and WeaponHitRE:IsA("RemoteEvent"),  "[WeaponService] RemoteEvent '"..EVT_WEAPON_HIT.."' no encontrado")
+local Shared            = ReplicatedStorage:WaitForChild("Shared")
+local ConfigWeapon      = require(Shared:WaitForChild("Config"):WaitForChild("Weapon"))
 
 local M = {}
 
--- Estado local para habilitar/bloquear disparos según la ronda
-local allowFire = false
-function M.setRoundState(s: "PREPARE" | "COUNTDOWN" | "ACTIVE" | "POST")
-	allowFire = (s == "ACTIVE")
-end
+local roundState: "WAITING" | "PREPARE" | "COUNTDOWN" | "ACTIVE" | "ROUND_END" = "WAITING"
 
-local function isHead(part: BasePart?): boolean
-	if not part then return false end
-	return part.Name:lower():find("head") ~= nil
-end
-
-local function doServerRay(origin: Vector3, direction: Vector3, ignore: {Instance})
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Exclude
-	params.FilterDescendantsInstances = ignore
-	params.IgnoreWater = true
-	return Workspace:Raycast(origin, direction, params)
-end
-
-local function getRange(): number
-	-- Usa tu config si existe (ajusta la ruta al arma que estés usando)
-	if Config and Config.Weapon and Config.Weapon.Deagle and typeof(Config.Weapon.Deagle.rangeStuds) == "number" then
-		return Config.Weapon.Deagle.rangeStuds
+-- Cooldowns por jugador/arma
+local lastShot: {[number]: number} = {} -- key = player.UserId
+local function canFire(plr: Player, weaponName: string): (boolean, number)
+	local now = time()
+	local cfg = ConfigWeapon[weaponName]
+	local cooldown = (cfg and cfg.cooldown) or 0.4
+	local t0 = lastShot[plr.UserId] or 0
+	if now - t0 < cooldown then
+		return false, cooldown - (now - t0)
 	end
-	return 300 -- fallback razonable
+	return true, 0
+end
+
+-- FOV de validación más permisivo
+local FOV_DEG = 20 -- (antes ~5, muy estricto)
+
+-- Detección de daño: soporta tu tabla damage.{head,torso,limb} o baseDamage+multiplier
+local function resolveDamage(weaponName: string, hitPartName: string): number
+	local cfg = ConfigWeapon[weaponName]
+	if not cfg then
+		return 60 -- fallback MVP
+	end
+
+	-- Si existe tabla damage por zona, úsala
+	if type(cfg.damage) == "table" then
+		if hitPartName == "Head" then
+			return cfg.damage.head or 90
+		end
+		-- torso vs extremidades (por simplicidad)
+		if hitPartName == "UpperTorso" or hitPartName == "LowerTorso" or hitPartName == "HumanoidRootPart" then
+			return cfg.damage.torso or 60
+		end
+		return cfg.damage.limb or 40
+	end
+
+	-- Si no, usa baseDamage * headshotMultiplier
+	local base = cfg.baseDamage or 60
+	local mult = cfg.headshotMultiplier or 2
+	if hitPartName == "Head" then
+		return base * mult
+	end
+	return base
+end
+
+local function isWithinFOV(shooterCF: CFrame, targetPos: Vector3): boolean
+	local look = shooterCF.LookVector
+	local dir = (targetPos - shooterCF.Position)
+	if dir.Magnitude <= 0.001 then
+		return true
+	end
+	dir = dir.Unit
+	local dot = look:Dot(dir)
+	-- cos(FOV/2)
+	local cosHalf = math.cos(math.rad(FOV_DEG) / 2)
+	return dot >= cosHalf
+end
+
+-- Raycast servidor desde la cabeza del tirador
+local function serverRaycastFromPlr(plr: Player, maxDistance: number?): (Instance?, Vector3)
+	maxDistance = maxDistance or 1000
+	local char = plr.Character
+	if not char then return nil, Vector3.new() end
+	local head = char:FindFirstChild("Head") :: BasePart?
+	local hrp  = char:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if not head or not hrp then return nil, Vector3.new() end
+
+	local origin = head.Position
+	local dir = hrp.CFrame.LookVector * maxDistance
+
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Blacklist
+	params.FilterDescendantsInstances = {char}
+
+	local rc = Workspace:Raycast(origin, dir, params)
+	if rc then
+		return rc.Instance, rc.Position
+	end
+	return nil, origin + dir
+end
+
+function M.setRoundState(s: any)
+	roundState = s
+end
+
+local function applyDamage(target: Instance, dmg: number)
+	local model = target:FindFirstAncestorOfClass("Model")
+	if not model then return end
+	local hum = model:FindFirstChildOfClass("Humanoid")
+	if not hum then return end
+	hum:TakeDamage(dmg)
 end
 
 function M.start()
-	print("[WeaponService] start()")
+	print("[WEAPON] start()")
+	-- 🔹 Eliminar listener no-op de Round:State (ya no existe aquí)
 
-	-- inicia el flag según el estado actual
-	if RoundService and RoundService.getState then
-		M.setRoundState(RoundService.getState() :: any)
-	end
+	EVT_FIRE.OnServerEvent:Connect(function(plr: Player, payload: any)
+		-- payload esperado: { weapon = "Deagle" }
+		if roundState ~= "ACTIVE" then
+			return
+		end
+		local weaponName = (payload and payload.weapon) or "Deagle"
 
-	WeaponFireRE.OnServerEvent:Connect(function(player: Player, payload)
-		-- payload esperado: {origin:Vector3, dir:Vector3 (unit), range:number?}
-		if not allowFire then return end
-
-		if typeof(payload) ~= "table" then return end
-		local origin = payload.origin
-		local dir    = payload.dir
-		local range  = payload.range
-		if typeof(origin) ~= "Vector3" or typeof(dir) ~= "Vector3" then return end
-
-		-- normaliza por si vienen magnitudes distintas de 1
-		if dir.Magnitude < 0.99 or dir.Magnitude > 1.01 then
-			dir = dir.Unit
+		local ok, remain = canFire(plr, weaponName)
+		if not ok then
+			return
 		end
 
-		range = (typeof(range) == "number" and range or getRange())
-
-		local char = player.Character
-		if not char then return end
-
-		local result = doServerRay(origin, dir * range, {char})
-
-		if result and result.Instance then
-			local hitPart: BasePart = result.Instance
-			local hitPos: Vector3   = result.Position
-			local targetModel = hitPart:FindFirstAncestorOfClass("Model")
-			local isHS = isHead(hitPart)
-
-			local damage = isHS and 100 or 35
-			local killed = false
-			local targetId: number? = nil
-
-			if targetModel then
-				-- intenta mapear a jugador objetivo
-				local targetHum = targetModel:FindFirstChildOfClass("Humanoid")
-				local targetPlr = targetHum and game.Players:GetPlayerFromCharacter(targetModel) or nil
-				targetId = targetPlr and targetPlr.UserId or nil
-				killed = HealthService.applyDamage(targetModel, damage)
-			end
-
-			WeaponHitRE:FireAllClients({
-				from = player.UserId,
-				target = targetId,    -- ✅ para HUD/FX (marcador de impacto/killfeed)
-				at = hitPos,          -- ✅ posición exacta del impacto
-				part = hitPart.Name,
-				isHeadshot = isHS,
-				damage = damage,
-				killed = killed,
-			})
-		else
-			-- “fallo”: manda punto máximo para trazar líneas/bullet holes client
-			WeaponHitRE:FireAllClients({
-				from = player.UserId,
-				target = nil,
-				at = origin + dir * range,
-				part = "None",
-				isHeadshot = false,
-				damage = 0,
-				killed = false,
-			})
+		-- Raycast y validaciones
+		local hitPart, hitPos = serverRaycastFromPlr(plr, 1000)
+		if not hitPart then
+			lastShot[plr.UserId] = time()
+			EVT_HIT:FireClient(plr, false, hitPos)
+			return
 		end
+
+		-- FOV check (contra el punto impactado)
+		local char = plr.Character
+		local hrp  = char and char:FindFirstChild("HumanoidRootPart") :: BasePart?
+		if hrp and not isWithinFOV(hrp.CFrame, hitPos) then
+			-- fuera de FOV permitido
+			lastShot[plr.UserId] = time()
+			EVT_HIT:FireClient(plr, false, hitPos)
+			return
+		end
+
+		-- Aplicar daño si corresponde
+		local dmg = resolveDamage(weaponName, hitPart.Name)
+		applyDamage(hitPart, dmg)
+
+		lastShot[plr.UserId] = time()
+		EVT_HIT:FireClient(plr, true, hitPos)
 	end)
 end
 
