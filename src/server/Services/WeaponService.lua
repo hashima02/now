@@ -1,123 +1,133 @@
 --!strict
--- WeaponService.lua — valida disparos y decide hits
+-- File: src/server/Services/WeaponService.lua
+
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Players = game:GetService("Players")
-local Workspace = game:GetService("Workspace")
+local Workspace         = game:GetService("Workspace")
 
-local Shared = ReplicatedStorage:WaitForChild("Shared")
-local Config = require(Shared:WaitForChild("Config"))
-local Contracts = require(Shared:WaitForChild("Contracts"))
+local ServicesFolder    = script.Parent
+local RoundService      = require(ServicesFolder:WaitForChild("RoundService"))
+local HealthService     = require(ServicesFolder:WaitForChild("HealthService"))
 
-local EventsFolder = ReplicatedStorage:WaitForChild("Events")
-local Remotes = EventsFolder:WaitForChild("Remotes")
-local FIRE_EVENT = Remotes:WaitForChild("Weapon:Fire:v1") :: RemoteEvent
-local HIT_EVENT = Remotes:WaitForChild("Weapon:Hit:v1") :: RemoteEvent
-local ROUND_STATE_EVENT = Remotes:WaitForChild("Round:State") :: RemoteEvent
+-- Contracts opcional
+local Contracts = nil
+pcall(function()
+	Contracts = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Contracts"))
+end)
 
-local currentRoundState: string = "WAITING"
-ROUND_STATE_EVENT.OnServerEvent:Connect(function() end) -- no-op (client-only); mantenemos variable con un listener indirecto:
--- Mejor: reflejar el estado vía un BindableEvent interno o exponer getter de RoundService.
--- Para mantenerlo simple aquí, actualizaremos por un “proxy” manual desde RoundService si decides luego.
+-- Config opcional (para tomar el rango del arma)
+local Config = nil
+pcall(function()
+	Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+end)
 
--- Cooldown por jugador
-local lastShot: {[Player]: number} = {}
+local REMOTES = ReplicatedStorage:WaitForChild("Events"):WaitForChild("Remotes")
+local EVT_WEAPON_FIRE = (Contracts and Contracts.Events and Contracts.Events.WeaponFireV1) and Contracts.Events.WeaponFireV1 or "Weapon:Fire:v1"
+local EVT_WEAPON_HIT  = (Contracts and Contracts.Events and Contracts.Events.WeaponHitV1)  and Contracts.Events.WeaponHitV1  or "Weapon:Hit:v1"
 
--- Raycast params básicos (ignora personaje del tirador)
-local function buildRaycastParams(ignore: Instance)
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Exclude
-	params.FilterDescendantsInstances = {ignore}
-	params.IgnoreWater = true
-	return params
+local WeaponFireRE = REMOTES:FindFirstChild(EVT_WEAPON_FIRE)
+local WeaponHitRE  = REMOTES:FindFirstChild(EVT_WEAPON_HIT)
+assert(WeaponFireRE and WeaponFireRE:IsA("RemoteEvent"), "[WeaponService] RemoteEvent '"..EVT_WEAPON_FIRE.."' no encontrado")
+assert(WeaponHitRE  and WeaponHitRE:IsA("RemoteEvent"),  "[WeaponService] RemoteEvent '"..EVT_WEAPON_HIT.."' no encontrado")
+
+local M = {}
+
+-- Estado local para habilitar/bloquear disparos según la ronda
+local allowFire = false
+function M.setRoundState(s: "PREPARE" | "COUNTDOWN" | "ACTIVE" | "POST")
+	allowFire = (s == "ACTIVE")
 end
 
--- Checa FOV simple entre mirada del personaje y dirección del tiro
-local function withinFOV(p: Player, dir: Vector3): boolean
-	local ch = p.Character
-	local hrp = ch and ch:FindFirstChild("HumanoidRootPart") :: BasePart
-	if not hrp then return true end
-	local look = hrp.CFrame.LookVector
-	local angle = math.deg(math.acos(math.clamp(look:Dot(dir.Unit), -1, 1)))
-	local limit = (Config.Weapon and Config.Weapon.Deagle and Config.Weapon.Deagle.fovCheckDeg) or 90
-	return angle <= limit
-end
-
--- Determina si fue headshot simple (impactó en un MeshPart/Part con "Head" en el nombre)
 local function isHead(part: BasePart?): boolean
 	if not part then return false end
-	local n = string.lower(part.Name)
-	return n == "head" or n:find("head") ~= nil
+	return part.Name:lower():find("head") ~= nil
 end
 
-local function currentTime()
-	return os.clock()
+local function doServerRay(origin: Vector3, direction: Vector3, ignore: {Instance})
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = ignore
+	params.IgnoreWater = true
+	return Workspace:Raycast(origin, direction, params)
 end
 
--- Exponer setter sencillo para que RoundService nos diga el estado actual
-local WeaponService = {}
-function WeaponService.setRoundState(s: string)
-	currentRoundState = s
+local function getRange(): number
+	-- Usa tu config si existe (ajusta la ruta al arma que estés usando)
+	if Config and Config.Weapon and Config.Weapon.Deagle and typeof(Config.Weapon.Deagle.rangeStuds) == "number" then
+		return Config.Weapon.Deagle.rangeStuds
+	end
+	return 300 -- fallback razonable
 end
 
-local function onFire(player: Player, payload: {originCF: CFrame?, cameraDir: Vector3?, timestamp: number?, bulletId: string?})
-	-- Validaciones mínimas
-	if currentRoundState ~= "ACTIVE" then
-		print("[WEAPON] Ignorado (estado no ACTIVE)")
-		return
+function M.start()
+	print("[WeaponService] start()")
+
+	-- inicia el flag según el estado actual
+	if RoundService and RoundService.getState then
+		M.setRoundState(RoundService.getState() :: any)
 	end
 
-	local now = currentTime()
-	local cd = (Config.Weapon and Config.Weapon.Deagle and Config.Weapon.Deagle.cooldown) or 0.2
-	local last = lastShot[player] or 0
-	if now - last < cd then
-		print("[WEAPON] Cooldown")
-		return
-	end
-	lastShot[player] = now
+	WeaponFireRE.OnServerEvent:Connect(function(player: Player, payload)
+		-- payload esperado: {origin:Vector3, dir:Vector3 (unit), range:number?}
+		if not allowFire then return end
 
-	local dir = (payload and payload.cameraDir) or Vector3.new(0,0,-1)
-	if not withinFOV(player, dir) then
-		print("[WEAPON] Fuera de FOV")
-		return
-	end
+		if typeof(payload) ~= "table" then return end
+		local origin = payload.origin
+		local dir    = payload.dir
+		local range  = payload.range
+		if typeof(origin) ~= "Vector3" or typeof(dir) ~= "Vector3" then return end
 
-	-- Raycast server
-	local character = player.Character
-	if not character then return end
-	local origin = (payload and payload.originCF and payload.originCF.Position) or (character:FindFirstChild("Head") and (character.Head :: BasePart).Position) or Vector3.zero
-	local params = buildRaycastParams(character)
-	local rayResult = Workspace:Raycast(origin, dir.Unit * 1000, params)
-
-	local hitPlayer: Player? = nil
-	local headshot = false
-	if rayResult then
-		local inst = rayResult.Instance
-		local model = inst:FindFirstAncestorOfClass("Model")
-		if model then
-			local hum = model:FindFirstChildOfClass("Humanoid")
-			if hum then
-				hitPlayer = Players:GetPlayerFromCharacter(model)
-				headshot = isHead(inst)
-			end
+		-- normaliza por si vienen magnitudes distintas de 1
+		if dir.Magnitude < 0.99 or dir.Magnitude > 1.01 then
+			dir = dir.Unit
 		end
-	end
 
-	-- Notifica al cliente del tirador (hitmarker básico) y aplica daño si procede
-	HIT_EVENT:FireClient(player, {
-		hit = hitPlayer and true or false,
-		headshot = headshot,
-	})
+		range = (typeof(range) == "number" and range or getRange())
 
-	if hitPlayer then
-		local base = (Config.Weapon and Config.Weapon.Deagle and Config.Weapon.Deagle.baseDamage) or 60
-		local HealthService = require(script.Parent:WaitForChild("HealthService"))
-		HealthService.applyDamage(hitPlayer, base, {headshot = headshot})
-	end
+		local char = player.Character
+		if not char then return end
+
+		local result = doServerRay(origin, dir * range, {char})
+
+		if result and result.Instance then
+			local hitPart: BasePart = result.Instance
+			local hitPos: Vector3   = result.Position
+			local targetModel = hitPart:FindFirstAncestorOfClass("Model")
+			local isHS = isHead(hitPart)
+
+			local damage = isHS and 100 or 35
+			local killed = false
+			local targetId: number? = nil
+
+			if targetModel then
+				-- intenta mapear a jugador objetivo
+				local targetHum = targetModel:FindFirstChildOfClass("Humanoid")
+				local targetPlr = targetHum and game.Players:GetPlayerFromCharacter(targetModel) or nil
+				targetId = targetPlr and targetPlr.UserId or nil
+				killed = HealthService.applyDamage(targetModel, damage)
+			end
+
+			WeaponHitRE:FireAllClients({
+				from = player.UserId,
+				target = targetId,    -- ✅ para HUD/FX (marcador de impacto/killfeed)
+				at = hitPos,          -- ✅ posición exacta del impacto
+				part = hitPart.Name,
+				isHeadshot = isHS,
+				damage = damage,
+				killed = killed,
+			})
+		else
+			-- “fallo”: manda punto máximo para trazar líneas/bullet holes client
+			WeaponHitRE:FireAllClients({
+				from = player.UserId,
+				target = nil,
+				at = origin + dir * range,
+				part = "None",
+				isHeadshot = false,
+				damage = 0,
+				killed = false,
+			})
+		end
+	end)
 end
 
-function WeaponService.start()
-	FIRE_EVENT.OnServerEvent:Connect(onFire)
-	print("[WEAPON] start() listo")
-end
-
-return WeaponService
+return M
