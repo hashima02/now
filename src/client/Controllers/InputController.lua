@@ -26,11 +26,11 @@ local function onInputBegan(input: InputObject, gp: boolean)
 end
 
 local function onInputEnded(_input: InputObject, _gp: boolean)
-	-- reservado para automático/hold si lo necesitas
+	-- reservado si luego implementas autofire/hold
 end
 
 local function bindRoundState()
-	-- server envía: (state, seed)
+	-- el server envía: (state, seed)
 	EVT_ROUND_STATE.OnClientEvent:Connect(function(state: RoundState)
 		roundState = state
 	end)

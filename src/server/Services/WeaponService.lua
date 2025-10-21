@@ -4,19 +4,21 @@ local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace         = game:GetService("Workspace")
 
-local Events            = ReplicatedStorage:WaitForChild("Events")
-local EVT_FIRE          = Events:WaitForChild("Weapon:Fire:v1")
-local EVT_HIT           = Events:WaitForChild("Weapon:Hit:v1") -- solo para replicar hitmarkers
+local Events       = ReplicatedStorage:WaitForChild("Events")
+local EVT_FIRE     = Events:WaitForChild("Weapon:Fire:v1")
+local EVT_HIT      = Events:WaitForChild("Weapon:Hit:v1")
 
-local Shared            = ReplicatedStorage:WaitForChild("Shared")
-local ConfigWeapon      = require(Shared:WaitForChild("Config"):WaitForChild("Weapon"))
+local Shared       = ReplicatedStorage:WaitForChild("Shared")
+local ConfigWeapon = require(Shared:WaitForChild("Config"):WaitForChild("Weapon"))
+
+export type RoundState = "WAITING" | "PREPARE" | "COUNTDOWN" | "ACTIVE" | "ROUND_END"
 
 local M = {}
+local roundState: RoundState = "WAITING"
 
-local roundState: "WAITING" | "PREPARE" | "COUNTDOWN" | "ACTIVE" | "ROUND_END" = "WAITING"
+-- cooldowns por jugador
+local lastShot: {[number]: number} = {}
 
--- Cooldowns por jugador/arma
-local lastShot: {[number]: number} = {} -- key = player.UserId
 local function canFire(plr: Player, weaponName: string): (boolean, number)
 	local now = time()
 	local cfg = ConfigWeapon[weaponName]
@@ -28,29 +30,23 @@ local function canFire(plr: Player, weaponName: string): (boolean, number)
 	return true, 0
 end
 
--- FOV de validación más permisivo
-local FOV_DEG = 20 -- (antes ~5, muy estricto)
+local function getFovDeg(weaponName: string): number
+	local cfg = ConfigWeapon[weaponName]
+	return (cfg and cfg.fovCheckDeg) or 20 -- default 20° (MVP)
+end
 
--- Detección de daño: soporta tu tabla damage.{head,torso,limb} o baseDamage+multiplier
 local function resolveDamage(weaponName: string, hitPartName: string): number
 	local cfg = ConfigWeapon[weaponName]
-	if not cfg then
-		return 60 -- fallback MVP
-	end
-
-	-- Si existe tabla damage por zona, úsala
+	if not cfg then return 60 end
 	if type(cfg.damage) == "table" then
 		if hitPartName == "Head" then
 			return cfg.damage.head or 90
 		end
-		-- torso vs extremidades (por simplicidad)
 		if hitPartName == "UpperTorso" or hitPartName == "LowerTorso" or hitPartName == "HumanoidRootPart" then
 			return cfg.damage.torso or 60
 		end
 		return cfg.damage.limb or 40
 	end
-
-	-- Si no, usa baseDamage * headshotMultiplier
 	local base = cfg.baseDamage or 60
 	local mult = cfg.headshotMultiplier or 2
 	if hitPartName == "Head" then
@@ -59,7 +55,7 @@ local function resolveDamage(weaponName: string, hitPartName: string): number
 	return base
 end
 
-local function isWithinFOV(shooterCF: CFrame, targetPos: Vector3): boolean
+local function isWithinFOV(shooterCF: CFrame, targetPos: Vector3, fovDeg: number): boolean
 	local look = shooterCF.LookVector
 	local dir = (targetPos - shooterCF.Position)
 	if dir.Magnitude <= 0.001 then
@@ -67,12 +63,10 @@ local function isWithinFOV(shooterCF: CFrame, targetPos: Vector3): boolean
 	end
 	dir = dir.Unit
 	local dot = look:Dot(dir)
-	-- cos(FOV/2)
-	local cosHalf = math.cos(math.rad(FOV_DEG) / 2)
+	local cosHalf = math.cos(math.rad(fovDeg) / 2)
 	return dot >= cosHalf
 end
 
--- Raycast servidor desde la cabeza del tirador
 local function serverRaycastFromPlr(plr: Player, maxDistance: number?): (Instance?, Vector3)
 	maxDistance = maxDistance or 1000
 	local char = plr.Character
@@ -95,7 +89,7 @@ local function serverRaycastFromPlr(plr: Player, maxDistance: number?): (Instanc
 	return nil, origin + dir
 end
 
-function M.setRoundState(s: any)
+function M.setRoundState(s: RoundState)
 	roundState = s
 end
 
@@ -109,21 +103,17 @@ end
 
 function M.start()
 	print("[WEAPON] start()")
-	-- 🔹 Eliminar listener no-op de Round:State (ya no existe aquí)
-
 	EVT_FIRE.OnServerEvent:Connect(function(plr: Player, payload: any)
-		-- payload esperado: { weapon = "Deagle" }
 		if roundState ~= "ACTIVE" then
 			return
 		end
 		local weaponName = (payload and payload.weapon) or "Deagle"
 
-		local ok, remain = canFire(plr, weaponName)
+		local ok, _remain = canFire(plr, weaponName)
 		if not ok then
 			return
 		end
 
-		-- Raycast y validaciones
 		local hitPart, hitPos = serverRaycastFromPlr(plr, 1000)
 		if not hitPart then
 			lastShot[plr.UserId] = time()
@@ -131,19 +121,16 @@ function M.start()
 			return
 		end
 
-		-- FOV check (contra el punto impactado)
 		local char = plr.Character
 		local hrp  = char and char:FindFirstChild("HumanoidRootPart") :: BasePart?
-		if hrp and not isWithinFOV(hrp.CFrame, hitPos) then
-			-- fuera de FOV permitido
+		local fov  = getFovDeg(weaponName)
+		if hrp and not isWithinFOV(hrp.CFrame, hitPos, fov) then
 			lastShot[plr.UserId] = time()
 			EVT_HIT:FireClient(plr, false, hitPos)
 			return
 		end
 
-		-- Aplicar daño si corresponde
-		local dmg = resolveDamage(weaponName, hitPart.Name)
-		applyDamage(hitPart, dmg)
+		applyDamage(hitPart, resolveDamage(weaponName, hitPart.Name))
 
 		lastShot[plr.UserId] = time()
 		EVT_HIT:FireClient(plr, true, hitPos)
