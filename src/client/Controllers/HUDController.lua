@@ -1,6 +1,6 @@
 -- File: src/client/Controllers/HUDController.lua
 --!strict
--- Escucha estado de ronda y actualiza HUD básico
+-- Escucha estado de ronda y actualiza HUD (Phase + Timer)
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -8,28 +8,29 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
-local Events = ReplicatedStorage:WaitForChild("Events")
+-- Remotos: ReplicatedStorage/Events/Remotes
+local Events  = ReplicatedStorage:WaitForChild("Events")
 local Remotes = Events:WaitForChild("Remotes")
 local EVT_ROUND_STATE: RemoteEvent = Remotes:WaitForChild("Round:State") :: RemoteEvent
 
 local M = {}
 
-local function setTextSafe(label: TextLabel?, text: string)
-	if label and label:IsA("TextLabel") then
-		label.Text = text
+local function setTextSafe(obj: Instance?, text: string)
+	if obj and obj:IsA("TextLabel") then
+		(obj :: TextLabel).Text = text
 	end
 end
 
 function M.start()
-	-- HUD opcional: HUDGui/InGameHUD/Top/PhaseLabel + TimerLabel (ajusta a tu jerarquía real)
+	-- Ajusta estos paths a tu jerarquía real de GUI si difieren
 	local hudGui = PlayerGui:FindFirstChild("HUDGui")
 	local inGame = hudGui and hudGui:FindFirstChild("InGameHUD")
-	local top = inGame and inGame:FindFirstChild("Top")
-	local phaseLabel = top and top:FindFirstChild("PhaseLabel") :: TextLabel?
-	local timerLabel = top and top:FindFirstChild("TimerLabel") :: TextLabel?
+	local top    = inGame and inGame:FindFirstChild("Top")
+	local phaseLabel = top and top:FindFirstChild("PhaseLabel")
+	local timerLabel = top and top:FindFirstChild("TimerLabel")
 
 	EVT_ROUND_STATE.OnClientEvent:Connect(function(payload)
-		-- payload = { state = "PREPARE"|"COUNTDOWN"|"ACTIVE"|"END", endsAt = tick() }
+		-- payload: { state: string, endsAt: number? }
 		local state = payload.state :: string
 		local endsAt = payload.endsAt :: number?
 
