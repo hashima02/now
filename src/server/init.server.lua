@@ -1,5 +1,7 @@
+-- File: src/server/init.server.lua
 --!strict
--- init.server.lua — bootstrap de servicios
+-- Bootstrap de servicios en orden sugerido
+
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local ServicesFolder = ServerScriptService:WaitForChild("Services")
@@ -7,7 +9,7 @@ local RoundService   = require(ServicesFolder:WaitForChild("RoundService"))
 local WeaponService  = require(ServicesFolder:WaitForChild("WeaponService"))
 local HealthService  = require(ServicesFolder:WaitForChild("HealthService"))
 
--- Orden sugerido: primero HP (reset), luego armas (escucha de disparos), y al final rondas (FSM)
+-- Orden: reset HP -> armas -> rondas
 HealthService.resetAll()
 WeaponService.start()
 RoundService.start()

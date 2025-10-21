@@ -1,98 +1,100 @@
+-- File: src/server/Services/RoundService.lua
 --!strict
--- RoundService.lua
-local Players              = game:GetService("Players")
-local ReplicatedStorage    = game:GetService("ReplicatedStorage")
-local Workspace            = game:GetService("Workspace")
-local RunService           = game:GetService("RunService")
+-- FSM simple de ronda y broadcast vía Remotes
 
-local EventsFolder         = ReplicatedStorage:WaitForChild("Events")
-local ROUND_STATE_EVENT    = EventsFolder:WaitForChild("Round:State")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local TeleportService = game:GetService("TeleportService") -- si lo necesitas luego
 
-local ServerScriptService  = game:GetService("ServerScriptService")
-local WeaponService        = require(ServerScriptService.Services:WaitForChild("WeaponService"))
-local HealthService        = require(ServerScriptService.Services:WaitForChild("HealthService"))
-
-export type RoundState = "WAITING" | "PREPARE" | "COUNTDOWN" | "ACTIVE" | "ROUND_END"
+local Events = ReplicatedStorage:WaitForChild("Events")
+local Remotes = Events:WaitForChild("Remotes")
+local EVT_ROUND_STATE: RemoteEvent = Remotes:WaitForChild("Round:State") :: RemoteEvent
 
 local M = {}
-local state: RoundState = "WAITING"
-local seed = 0
-local countdownEndT = 0
-local ACTIVE_TIME = 60
 
-local function setState(nextState: RoundState)
-	state = nextState
-	-- broadcast a clientes
-	ROUND_STATE_EVENT:FireAllClients(state, seed)
-	-- notificar a subs del servidor (WeaponService, etc.)
-	if WeaponService and WeaponService.setRoundState then
-		WeaponService.setRoundState(state)
-	end
+export type RoundState = "PREPARE" | "COUNTDOWN" | "ACTIVE" | "END"
+
+local ACTIVE_TIME = 60
+local COUNTDOWN_TIME = 10
+
+local currentState: RoundState = "PREPARE"
+local endsAt: number? = nil
+
+local function broadcast(state: RoundState, endsAtTime: number?)
+	EVT_ROUND_STATE:FireAllClients({
+		state = state,
+		endsAt = endsAtTime,
+	})
 end
 
-local function getSpawn(partName: string): CFrame
-	local spawns = Workspace:FindFirstChild("Spawns")
-	if spawns and spawns:IsA("Folder") then
-		local p = spawns:FindFirstChild(partName)
-		if p and p:IsA("BasePart") then
-			return p.CFrame + Vector3.new(0, 3, 0)
-		end
+local function setState(state: RoundState, dur: number?)
+	currentState = state
+	if dur and dur > 0 then
+		endsAt = tick() + dur
+	else
+		endsAt = nil
+	end
+	broadcast(currentState, endsAt)
+end
+
+local function getSpawn(name: string): CFrame
+	local ws = game:GetService("Workspace")
+	local spawns = ws:FindFirstChild("Spawns")
+	if not spawns then
+		return CFrame.new(0, 5, 0)
+	end
+	local p = spawns:FindFirstChild(name)
+	if p and p:IsA("BasePart") then
+		return p.CFrame + Vector3.new(0, 4, 0)
 	end
 	return CFrame.new(0, 5, 0)
 end
 
-local function teleportTeams()
-	local aCF = getSpawn("A")
-	local bCF = getSpawn("B")
-	local toggle = true
+local function teleportAllToLobby()
+	local cf = getSpawn("Lobby")
 	for _, plr in ipairs(Players:GetPlayers()) do
 		local char = plr.Character or plr.CharacterAdded:Wait()
-		local hrp = char:FindFirstChild("HumanoidRootPart") :: BasePart?
-		if hrp then
-			hrp.CFrame = (toggle and aCF or bCF)
-			toggle = not toggle
-		end
+		local hrp = char:WaitForChild("HumanoidRootPart") :: BasePart
+		hrp.CFrame = cf
 	end
 end
 
-local function teamOrTwoPlayers(): boolean
-	return #Players:GetPlayers() >= 2
+local function teleportToTrackAlternating()
+	local useA = true
+	for _, plr in ipairs(Players:GetPlayers()) do
+		local cf = getSpawn(useA and "TrackA" or "TrackB")
+		useA = not useA
+		local char = plr.Character or plr.CharacterAdded:Wait()
+		local hrp = char:WaitForChild("HumanoidRootPart") :: BasePart
+		hrp.CFrame = cf
+	end
+end
+
+local function runLoop()
+	while true do
+		-- PREPARE
+		teleportAllToLobby()
+		setState("PREPARE")
+		task.wait(2)
+
+		-- COUNTDOWN
+		teleportToTrackAlternating()
+		setState("COUNTDOWN", COUNTDOWN_TIME)
+		task.wait(COUNTDOWN_TIME)
+
+		-- ACTIVE
+		setState("ACTIVE", ACTIVE_TIME)
+		task.wait(ACTIVE_TIME)
+
+		-- END
+		setState("END")
+		task.wait(4)
+	end
 end
 
 function M.start()
-	print("[ROUND] start()")
-	setState("WAITING")
-
-	RunService.Heartbeat:Connect(function()
-		if state == "WAITING" then
-			if teamOrTwoPlayers() then
-				seed = math.random(1, 99999)
-				setState("PREPARE")
-			end
-
-		elseif state == "PREPARE" then
-			HealthService.resetAll()
-			teleportTeams()
-			countdownEndT = time() + 10
-			setState("COUNTDOWN")
-
-		elseif state == "COUNTDOWN" then
-			if time() >= countdownEndT then
-				setState("ACTIVE")
-				countdownEndT = time() + ACTIVE_TIME
-			end
-
-		elseif state == "ACTIVE" then
-			if time() >= countdownEndT then
-				setState("ROUND_END")
-			end
-
-		elseif state == "ROUND_END" then
-			-- Pequeña pausa y reinicio
-			countdownEndT = time() + 3
-			setState("WAITING")
-		end
-	end)
+	task.spawn(runLoop)
+	print("[RoundService] start OK")
 end
 
 return M

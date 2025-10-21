@@ -1,45 +1,33 @@
+-- File: src/client/Controllers/InputController.lua
 --!strict
-local Players           = game:GetService("Players")
-local UserInputService  = game:GetService("UserInputService")
+-- Enruta inputs de jugador (ej. bloquear inputs por estado de ronda si así lo decides)
+
+local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local Events          = ReplicatedStorage:WaitForChild("Events")
-local EVT_ROUND_STATE = Events:WaitForChild("Round:State")
-
-export type RoundState = "WAITING" | "PREPARE" | "COUNTDOWN" | "ACTIVE" | "ROUND_END"
+local Events = ReplicatedStorage:WaitForChild("Events")
+local Remotes = Events:WaitForChild("Remotes")
+local EVT_ROUND_STATE: RemoteEvent = Remotes:WaitForChild("Round:State") :: RemoteEvent
 
 local M = {}
-local roundState: RoundState = "WAITING"
 
-local function canShoot(): boolean
-	return roundState == "ACTIVE"
-end
+local currentState: string = "PREPARE"
 
-local function onInputBegan(input: InputObject, gp: boolean)
-	if gp then return end
-	if input.UserInputType == Enum.UserInputType.MouseButton1 then
-		if canShoot() then
-			local WeaponController = require(script.Parent:WaitForChild("WeaponController"))
-			WeaponController.shoot("Deagle")
-		end
-	end
-end
-
-local function onInputEnded(_input: InputObject, _gp: boolean)
-	-- reservado si luego implementas autofire/hold
-end
-
-local function bindRoundState()
-	-- el server envía: (state, seed)
-	EVT_ROUND_STATE.OnClientEvent:Connect(function(state: RoundState)
-		roundState = state
-	end)
+local function setInputEnabled(enabled: boolean)
+	UserInputService.MouseIconEnabled = enabled
+	-- Aquí puedes deshabilitar más cosas según tu sistema (ej. construcción, tienda, etc.)
 end
 
 function M.start()
-	UserInputService.InputBegan:Connect(onInputBegan)
-	UserInputService.InputEnded:Connect(onInputEnded)
-	bindRoundState()
+	EVT_ROUND_STATE.OnClientEvent:Connect(function(payload)
+		currentState = payload.state :: string
+		-- Ejemplo: en COUNTDOWN/ACTIVE dejamos inputs on; en END/PREPARE podrías limitar.
+		if currentState == "END" then
+			setInputEnabled(false)
+		else
+			setInputEnabled(true)
+		end
+	end)
 end
 
 return M
