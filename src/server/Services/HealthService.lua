@@ -1,51 +1,53 @@
 -- File: src/server/Services/HealthService.lua
 --!strict
--- Control simple de salud + cálculo de headshot con Config.Deagle.headshotMultiplier
+-- HealthService.lua — HP simple
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+-- FIX: requerir Config directo
 local Config = require(Shared:WaitForChild("Config"))
 
-local M = {}
+local HealthService = {}
+HealthService.__index = HealthService
 
-local DEFAULT_HP = 100
+local MAX_HP = 100
 
-local function getLeaderstatsHumanoid(player: Player): Humanoid?
-	local char = player.Character or player.CharacterAdded:Wait()
-	local hum = char:FindFirstChildOfClass("Humanoid") :: Humanoid?
-	return hum
+local function ensureChar(p: Player)
+	if not p.Character then p.CharacterAdded:Wait() end
 end
 
-function M.resetAll()
-	for _, plr in ipairs(Players:GetPlayers()) do
-		local hum = getLeaderstatsHumanoid(plr)
+function HealthService.resetAll()
+	for _, p in Players:GetPlayers() do
+		ensureChar(p)
+		local hum = p.Character and p.Character:FindFirstChildOfClass("Humanoid")
 		if hum then
-			hum.Health = hum.MaxHealth
+			hum.MaxHealth = MAX_HP
+			hum.Health = MAX_HP
 		end
 	end
-	print("[HealthService] resetAll OK")
 end
 
-function M.applyDamage(targetPlayer: Player, damage: number, isHeadshot: boolean?, weaponName: string?, attacker: Player?)
-	local hum = getLeaderstatsHumanoid(targetPlayer)
-	if not hum then return end
+-- Nota: tu WeaponService ya calcula daño por zona (head/torso/limb).
+-- Aquí NO volvemos a aplicar multiplicadores para evitar doble conteo.
+function HealthService.applyDamage(target: Player, amount: number, info: {headshot: boolean}? )
+	ensureChar(target)
+	local hum = target.Character and target.Character:FindFirstChildOfClass("Humanoid")
+	if not hum or hum.Health <= 0 then return end
 
-	local dmg = damage
-	-- Por si algún flujo usa directamente el mult desde Config.Deagle:
-	if isHeadshot and weaponName == "Deagle" then
-		local mult = (Config and Config.Deagle and Config.Deagle.headshotMultiplier) or 2
-		-- Si el daño ya venía multiplicado, no volver a multiplicar. Aquí solo ejemplo.
-		-- dmg = math.floor(dmg * mult)
-		-- En este template asumimos que WeaponService ya aplicó el multiplicador,
-		-- así que NO lo duplicamos. Deja la línea comentada como referencia.
-	end
+	local dmg = math.max(0, amount)
+
+	-- Si quisieras forzar un multiplicador global por arma desde Config:
+	-- (ejemplo: Config.Deagle.headshotMultiplier)
+	-- if info and info.headshot then
+	--     local mult = (Config and Config.Deagle and Config.Deagle.headshotMultiplier) or 2
+	--     dmg *= mult
+	-- end
 
 	hum:TakeDamage(dmg)
-	if hum.Health <= 0 then
-		-- Aquí podrías sumar kills/assists, etc.
-	end
+	print(string.format("[HEALTH] %s -%.1f (headshot=%s) -> %.1f",
+		target.Name, dmg, tostring(info and info.headshot), hum.Health))
 end
 
-return M
+return HealthService
