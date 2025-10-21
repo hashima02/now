@@ -15,6 +15,7 @@ local Remotes = Events:WaitForChild("Remotes")
 local EVT_FIRE: RemoteEvent = Remotes:WaitForChild("Weapon:Fire:v1") :: RemoteEvent
 local EVT_HIT:  RemoteEvent = Remotes:WaitForChild("Weapon:Hit:v1")  :: RemoteEvent
 
+
 -- Config global (Shared/Config.lua exporta la tabla con Deagle directo)
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local ConfigWeapon = require(Shared:WaitForChild("Config"))
