@@ -1,57 +1,33 @@
 --!strict
--- WeaponClient.lua
-local Players           = game:GetService("Players")
+-- WeaponController.lua
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local UserInputService  = game:GetService("UserInputService")
 
-local LocalPlayer       = Players.LocalPlayer
-local Events            = ReplicatedStorage:WaitForChild("Events")
-local EVT_FIRE          = Events:WaitForChild("Weapon:Fire:v1")
-local EVT_HIT           = Events:WaitForChild("Weapon:Hit:v1")
-local EVT_ROUND_STATE   = Events:WaitForChild("Round:State")
+-- Remotos (directo en Events)
+local Events   = ReplicatedStorage:WaitForChild("Events")
+local EVT_FIRE = Events:WaitForChild("Weapon:Fire:v1")
+local EVT_HIT  = Events:WaitForChild("Weapon:Hit:v1")
 
-local roundState: "WAITING" | "PREPARE" | "COUNTDOWN" | "ACTIVE" | "ROUND_END" = "WAITING"
-local currentWeapon = "Deagle"
-local mouseDown = false
+local M = {}
 
--- FOV cliente (solo visual/UX si lo usabas) más permisivo para alinearse al servidor
-local FOV_DEG = 20
-
-local function canShoot(): boolean
-	return roundState == "ACTIVE"
-end
-
-EVT_ROUND_STATE.OnClientEvent:Connect(function(s: any, seed: number?)
-	roundState = s
-end)
-
--- Hit feedback básico
-EVT_HIT.OnClientEvent:Connect(function(success: boolean, pos: Vector3)
-	if success then
-		-- TODO: play hitmarker, sonido, flash UI, etc.
-	else
-		-- opcional: feedback de fallo
-	end
-end)
-
-local function tryShoot()
-	if not canShoot() then return end
+-- Disparo básico: el servidor valida FOV/CD y aplica daño
+function M.shoot(weaponName: string)
+	weaponName = weaponName or "Deagle"
 	EVT_FIRE:FireServer({
-		weapon = currentWeapon,
+		weapon = weaponName,
 	})
 end
 
-UserInputService.InputBegan:Connect(function(input, gp)
-	if gp then return end
-	if input.UserInputType == Enum.UserInputType.MouseButton1 then
-		mouseDown = true
-		tryShoot()
-	end
-end)
+-- Feedback de impacto
+local function bindHitFeedback()
+	EVT_HIT.OnClientEvent:Connect(function(success: boolean, pos: Vector3)
+		-- Aquí puedes integrar tu HUD/sonidos/retícula
+		-- Ejemplo mínimo (coméntalo si no quieres prints):
+		-- print(success and "[HIT] ✓" or "[HIT] ✗", pos)
+	end)
+end
 
-UserInputService.InputEnded:Connect(function(input, gp)
-	if gp then return end
-	if input.UserInputType == Enum.UserInputType.MouseButton1 then
-		mouseDown = false
-	end
-end)
+function M.start()
+	bindHitFeedback()
+end
+
+return M
