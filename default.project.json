@@ -3,26 +3,29 @@
   "servePort": 34872,
   "tree": {
     "$className": "DataModel",
+
     "ReplicatedStorage": {
       "$className": "ReplicatedStorage",
-      "Shared": { "$path": "src/Shared" },
-      "Events": { "$path": "src/Shared/Events" }
+      "Shared": { "$path": "src/shared" },
+      "Events": { "$path": "src/shared/Events.model.json" }
     },
+
     "ServerScriptService": {
       "$className": "ServerScriptService",
-      "Services": { "$path": "src/Server/Services" }
+      "Services": { "$path": "src/server/Services" }
     },
+
     "StarterPlayer": {
       "$className": "StarterPlayer",
       "StarterPlayerScripts": {
         "$className": "StarterPlayerScripts",
-        "Client": { "$path": "src/Client" }
+        "Client": { "$path": "src/client" }
       }
     },
+
     "StarterGui": {
       "$className": "StarterGui",
-      "HUD": { "$path": "src/Client/HUD" }
+      "HUD": { "$path": "src/client/HUD" }
     }
   }
 }
-
