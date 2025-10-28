@@ -1,50 +1,45 @@
--- File: ServerScriptService/Main.server.lua
+-- File: src/server/Main.server.lua
 --!strict
--- Unifica: Health + Weapon + Round (FSM)
--- Lee config desde ReplicatedStorage/Shared/Config.lua
--- Usa/crea Remotos en ReplicatedStorage/Events/Remotes
+-- Server único: Health + Weapon + Round
+-- Lee armas desde Config.Weapon[<name>]
+-- Lee tiempos desde Config.Round.time
+-- Usa 'time()' para endsAt y cooldowns
 
 --// Services
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
---// Shared Config
+--// Shared & Config
 local Shared = ReplicatedStorage:FindFirstChild("Shared") or Instance.new("Folder", ReplicatedStorage)
 Shared.Name = "Shared"
-local Config = require(Shared:WaitForChild("Config")) -- Deagle, cooldown, daños, FOV, etc.
+local Config = require(Shared:WaitForChild("Config"))
 
---// Ensure Events/Remotes exist (autoprovision si faltan)
+--// Ensure Events/Remotes (autoprovision robusto)
 local Events = ReplicatedStorage:FindFirstChild("Events") or Instance.new("Folder", ReplicatedStorage)
 Events.Name = "Events"
 local Remotes = Events:FindFirstChild("Remotes") or Instance.new("Folder", Events)
 Remotes.Name = "Remotes"
 
-local EVT_ROUND_STATE = Remotes:FindFirstChild("Round:State") :: RemoteEvent
-if not EVT_ROUND_STATE then
-	EVT_ROUND_STATE = Instance.new("RemoteEvent")
-	EVT_ROUND_STATE.Name = "Round:State"
-	EVT_ROUND_STATE.Parent = Remotes
+local function ensureRemote(name: string): RemoteEvent
+	local ev = Remotes:FindFirstChild(name)
+	if ev and ev:IsA("RemoteEvent") then
+		return ev
+	end
+	local r = Instance.new("RemoteEvent")
+	r.Name = name
+	r.Parent = Remotes
+	return r
 end
 
-local EVT_FIRE = Remotes:FindFirstChild("Weapon:Fire:v1") :: RemoteEvent
-if not EVT_FIRE then
-	EVT_FIRE = Instance.new("RemoteEvent")
-	EVT_FIRE.Name = "Weapon:Fire:v1"
-	EVT_FIRE.Parent = Remotes
-end
-
-local EVT_HIT = Remotes:FindFirstChild("Weapon:Hit:v1") :: RemoteEvent
-if not EVT_HIT then
-	EVT_HIT = Instance.new("RemoteEvent")
-	EVT_HIT.Name = "Weapon:Hit:v1"
-	EVT_HIT.Parent = Remotes
-end
+local EVT_ROUND_STATE = ensureRemote("Round:State")
+local EVT_FIRE        = ensureRemote("Weapon:Fire:v1")
+local EVT_HIT         = ensureRemote("Weapon:Hit:v1")
 
 --// Tipos
 type RoundState = "PREPARE" | "COUNTDOWN" | "ACTIVE" | "END"
 
---// ---------------- Health (simple) ----------------
+--// ---------------- Health ----------------
 local MAX_HP = 100
 
 local function getHumanoid(p: Player): Humanoid?
@@ -74,9 +69,14 @@ end
 local roundState: RoundState = "PREPARE"
 local lastShot: {[number]: number} = {}
 
+local function getWeaponCfg(weaponName: string)
+	local w = (Config and Config.Weapon and Config.Weapon[weaponName]) or nil
+	return w
+end
+
 local function canFire(plr: Player, weaponName: string): (boolean, number)
 	local now = time()
-	local cfg = Config[weaponName]
+	local cfg = getWeaponCfg(weaponName)
 	local cooldown = (cfg and cfg.cooldown) or 0.4
 	local t0 = lastShot[plr.UserId] or 0
 	if now - t0 < cooldown then
@@ -86,9 +86,10 @@ local function canFire(plr: Player, weaponName: string): (boolean, number)
 end
 
 local function resolveDamage(weaponName: string, hitPartName: string): number
-	local cfg = Config[weaponName]
+	local cfg = getWeaponCfg(weaponName)
 	if not cfg then return 60 end
 
+	-- Tabla de daños detallados
 	if type(cfg.damage) == "table" then
 		if hitPartName == "Head" then
 			return cfg.damage.head or 120
@@ -99,6 +100,7 @@ local function resolveDamage(weaponName: string, hitPartName: string): number
 		return cfg.damage.limb or 40
 	end
 
+	-- Esquema base + multiplicador
 	local base = cfg.baseDamage or 60
 	local mult = cfg.headshotMultiplier or 2
 	if hitPartName == "Head" then
@@ -108,7 +110,7 @@ local function resolveDamage(weaponName: string, hitPartName: string): number
 end
 
 local function getFovDeg(weaponName: string): number
-	local cfg = Config[weaponName]
+	local cfg = getWeaponCfg(weaponName)
 	return (cfg and cfg.fovCheckDeg) or 20
 end
 
@@ -128,7 +130,7 @@ local function serverRaycastFromPlr(plr: Player, maxDistance: number?): (Instanc
 	if not char then return nil, Vector3.new() end
 
 	local head = char:FindFirstChild("Head") :: BasePart?
-	local hrp = char:FindFirstChild("HumanoidRootPart") :: BasePart?
+	local hrp  = char:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if not head or not hrp then return nil, Vector3.new() end
 
 	local origin = head.Position
@@ -149,7 +151,6 @@ local function setRoundStateWeapon(s: RoundState)
 	roundState = s
 end
 
--- OnServerEvent handler (único)
 EVT_FIRE.OnServerEvent:Connect(function(plr: Player, payload: any)
 	if roundState ~= "ACTIVE" then return end
 	local weaponName = (payload and payload.weapon) or "Deagle"
@@ -179,10 +180,19 @@ EVT_FIRE.OnServerEvent:Connect(function(plr: Player, payload: any)
 end)
 
 --// ---------------- Round FSM ----------------
-local ACTIVE_TIME = 60
-local COUNTDOWN_TIME = 10
 local currentState: RoundState = "PREPARE"
 local endsAt: number? = nil
+
+local function readRoundTimes()
+	local t = (Config and Config.Round and Config.Round.time) or {}
+	return {
+		prepare  = tonumber(t.prepare)  or 3,
+		countdown= tonumber(t.countdown)or 3,
+		active   = tonumber(t.active)   or 45,
+		roundEnd = tonumber(t.roundEnd) or 3,
+		inter    = tonumber(t.inter)    or 2,
+	}
+end
 
 local function broadcastRound(state: RoundState, endsAtTime: number?)
 	EVT_ROUND_STATE:FireAllClients({
@@ -194,13 +204,11 @@ end
 local function setRoundState(state: RoundState, dur: number?)
 	currentState = state
 	if dur and dur > 0 then
-		endsAt = tick() + dur
+		endsAt = time() + dur
 	else
 		endsAt = nil
 	end
-	-- Sync con Weapon
 	setRoundStateWeapon(state)
-	-- Broadcast
 	broadcastRound(currentState, endsAt)
 end
 
@@ -236,27 +244,31 @@ end
 
 local function roundLoop()
 	while true do
+		local T = readRoundTimes()
+
 		-- PREPARE
 		resetAllHealth()
 		tpAllToLobby()
-		setRoundState("PREPARE")
-		task.wait(2)
+		setRoundState("PREPARE", T.prepare)
+		task.wait(T.prepare)
 
 		-- COUNTDOWN
 		tpAlternatingTracks()
-		setRoundState("COUNTDOWN", COUNTDOWN_TIME)
-		task.wait(COUNTDOWN_TIME)
+		setRoundState("COUNTDOWN", T.countdown)
+		task.wait(T.countdown)
 
 		-- ACTIVE
-		setRoundState("ACTIVE", ACTIVE_TIME)
-		task.wait(ACTIVE_TIME)
+		setRoundState("ACTIVE", T.active)
+		task.wait(T.active)
 
 		-- END
-		setRoundState("END")
-		task.wait(4)
+		setRoundState("END", T.roundEnd)
+		task.wait(T.roundEnd)
+
+		-- INTER (silencio entre rondas)
+		task.wait(T.inter)
 	end
 end
 
---// Boot
 task.spawn(roundLoop)
 print("[BOOT][SERVER] único script listo")
