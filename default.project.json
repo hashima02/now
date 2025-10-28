@@ -12,7 +12,7 @@
         "Config": { "$path": "src/shared/Config.lua" }
       },
 
-      "Events": { "$path": "src/shared/Events/Events.model.json" }
+      "Events": { "$path": "src/shared/Events.model.json" }
     },
 
     "ServerScriptService": {
